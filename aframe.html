@@ -1,10 +1,115 @@
+<!DOCTYPE html>
 <html>
   <head>
+    <meta charset="utf-8">
+    <title>VR Scene with Collisions</title>
     <script src="https://aframe.io/releases/1.4.2/aframe.min.js"></script>
+    <script>
+      (function() {
+        AFRAME.registerComponent('reset-on-collision', {
+          schema: {
+            with: {default: '.collision'},
+            colliderSize: {default: 0.5},
+            smoothRecovery: {default: true},
+            pushBackDistance: {default: 0}
+          },
+          init: function() {
+            this.el.setAttribute('geometry', `width: ${this.data.colliderSize}; depth: ${this.data.colliderSize}; height: ${this.data.colliderSize}`);
+            this.mesh = this.el.getObject3D('mesh');
+            this.boundingBox = new THREE.Box3();
+            this.collideWiths = this.el.sceneEl.querySelectorAll(this.data.with);
+            this.lastKnownGoodPosition = new THREE.Vector3().copy(this.el.object3D.position);
+            this.isColliding = false;
+            this.collisionRecoverySpeed = 0.3;
+            this.previousPosition = new THREE.Vector3().copy(this.el.object3D.position);
+          },
+          tick: function () {
+            if (!this.mesh) return;
+            this.boundingBox.setFromObject(this.mesh);
+            var thisMin = this.boundingBox.min;
+            var thisMax = this.boundingBox.max;
+            var currentPosition = new THREE.Vector3().copy(this.el.object3D.position);
+            var collisionResult = this.checkCollision(thisMin, thisMax);
+            if (collisionResult.colliding) {
+              var pushBackPosition = this.calculatePushBackPosition(currentPosition, collisionResult);
+              if (this.data.smoothRecovery) {
+                var newPosition = new THREE.Vector3();
+                newPosition.lerpVectors(currentPosition, pushBackPosition, this.collisionRecoverySpeed);
+                this.el.setAttribute('position', newPosition);
+              } else {
+                this.el.setAttribute('position', pushBackPosition);
+              }
+              this.lastKnownGoodPosition.copy(pushBackPosition);
+              this.isColliding = true;
+            } else {
+              if (!this.isColliding) this.lastKnownGoodPosition.copy(currentPosition);
+              this.isColliding = false;
+            }
+            this.previousPosition.copy(currentPosition);
+          },
+          checkCollision: function(thisMin, thisMax) {
+            var collisions = [];
+            for (var i = 0; i < this.collideWiths.length; i++) {
+              var collideWith = this.collideWiths[i];
+              var collideWithMesh = collideWith.getObject3D('mesh');
+              if (!collideWithMesh) continue;
+              var collideWithBoundingBox = new THREE.Box3().setFromObject(collideWithMesh);
+              var collideWithMin = collideWithBoundingBox.min;
+              var collideWithMax = collideWithBoundingBox.max;
+              var isColliding = (thisMin.x <= collideWithMax.x && thisMax.x >= collideWithMin.x) &&
+                                (thisMin.y <= collideWithMax.y && thisMax.y >= collideWithMin.y) &&
+                                (thisMin.z <= collideWithMax.z && thisMax.z >= collideWithMin.z);
+              if (isColliding) {
+                collisions.push({ collideWithBox: collideWithBoundingBox, playerBox: new THREE.Box3().set(thisMin, thisMax) });
+              }
+            }
+            return { colliding: collisions.length > 0, collisions: collisions };
+          },
+          calculatePushBackPosition: function(currentPosition, collision) {
+            var pushBack = new THREE.Vector3().copy(currentPosition);
+            for (var i = 0; i < collision.collisions.length; i++) {
+              var singleCollision = collision.collisions[i];
+              var playerBox = singleCollision.playerBox;
+              var obstacleBox = singleCollision.collideWithBox;
+              var playerCenter = new THREE.Vector3(); playerBox.getCenter(playerCenter);
+              var obstacleCenter = new THREE.Vector3(); obstacleBox.getCenter(obstacleCenter);
+              var direction = new THREE.Vector3().subVectors(playerCenter, obstacleCenter);
+              var overlapX = Math.min(playerBox.max.x - obstacleBox.min.x, obstacleBox.max.x - playerBox.min.x);
+              var overlapZ = Math.min(playerBox.max.z - obstacleBox.min.z, obstacleBox.max.z - playerBox.min.z);
+              if (Math.abs(overlapX) < Math.abs(overlapZ)) {
+                pushBack.x = direction.x > 0 ? obstacleBox.max.x + (playerBox.max.x - playerBox.min.x)/2 + this.data.pushBackDistance
+                                             : obstacleBox.min.x - (playerBox.max.x - playerBox.min.x)/2 - this.data.pushBackDistance;
+              } else {
+                pushBack.z = direction.z > 0 ? obstacleBox.max.z + (playerBox.max.z - playerBox.min.z)/2 + this.data.pushBackDistance
+                                             : obstacleBox.min.z - (playerBox.max.z - playerBox.min.z)/2 - this.data.pushBackDistance;
+              }
+            }
+            return pushBack;
+          }
+        });
+      })();
+      //покачивание деревьев
+      AFRAME.registerComponent('sway', {
+        schema: {
+          speed: {type:'number', default:1},
+          angle: {type:'number', default:5}
+        },
+        init: function() {
+          this.startRotation = this.el.getAttribute('rotation');
+        },
+        tick: function(time) {
+          const swayAngle = this.data.angle * Math.sin(time / 1000 * this.data.speed);
+          this.el.setAttribute('rotation', {
+            x: this.startRotation.x,
+            y: this.startRotation.y,
+            z: this.startRotation.z + swayAngle
+          });
+        }
+      });
+    </script>
   </head>
   <body>
     <a-scene background="color: #87CEEB">
-      
       <a-assets>
         <a-asset-item id="eiffel-model" src="models/eiffel_tower.glb"></a-asset-item>
         <a-asset-item id="monument-model" src="models/rhinoceros_in_orsay_museum_paris.glb"></a-asset-item>
@@ -13,56 +118,57 @@
         <a-asset-item id="building2" src="models/medieval_house.glb"></a-asset-item>
         <a-asset-item id="building3" src="models/medieval_house.glb"></a-asset-item>
       </a-assets>
+
       <a-entity id="ambientLight" light="type: ambient; intensity: 0.6; color: #fff"></a-entity>
       <a-entity id="pointLight" light="type: point; intensity: 1.2; distance: 50; color: #fff" position="0 10 10"></a-entity>
-      <a-entity camera look-controls position="0 1.6 5">
+      <a-entity id="camera" camera look-controls wasd-controls position="0 1.6 5" reset-on-collision="with: .collision">
         <a-entity cursor="fuse: true; fuseTimeout: 800"
                   geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.02"
                   material="color: cyan; shader: flat"
                   position="0 0 -1">
         </a-entity>
       </a-entity>
-      <a-entity id="paris" visible="true">
-        <a-plane rotation="-90 0 0" width="60" height="60" color="#0a0" position="0 0 0"></a-plane>
-        <a-plane rotation="-90 0 0" width="5" height="40" color="#555" position="0 0.01 -10"></a-plane>
-        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="-30 10 0" rotation="0 90 0" width="60" height="25"></a-image>
-        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="30 10 0" rotation="0 -90 0" width="60" height="25"></a-image>
-        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="0 10 -30" rotation="0 0 0" width="60" height="25"></a-image>
-        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="0 10 30" rotation="0 180 0" width="60" height="25"></a-image>
-        <a-gltf-model src="#bush-model" position="-5 0 -8" scale="15 15 15"></a-gltf-model>
-        <a-gltf-model src="#bush-model" position="5 0 -12" scale="15 15 15"></a-gltf-model>
-        <a-entity position="-12 0 0">
-          <a-gltf-model src="#bush-model" position="0 0 -2" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 2" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 6" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 10" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 14" scale="15 15 15"></a-gltf-model>
-        </a-entity>
+      
 
-        <a-gltf-model src="#building1" position="-24 0 0" scale="0.3 0.3 0.3" rotation="0 0 0"></a-gltf-model>
-        <a-gltf-model src="#building2" position="-20 0 19" scale="0.3 0.3 0.3" rotation="0 90 0"></a-gltf-model>
-        <a-gltf-model src="#building3" position="-23 0 -25" scale="0.3 0.3 0.3" rotation="0 90 0"></a-gltf-model>
+      <a-entity id="paris" visible="true">
+        <a-plane rotation="-90 0 0" width="60" height="60" color="#0a0"></a-plane>
+        <a-plane rotation="-90 0 0" width="5" height="40" color="#555" position="0 0.01 -10" class="collision"></a-plane>
+        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="-30 10 0" rotation="0 90 0" width="60" height="25" class="collision"></a-image>
+        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="30 10 0" rotation="0 -90 0" width="60" height="25" class="collision"></a-image>
+        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="0 10 -30" rotation="0 0 0" width="60" height="25" class="collision"></a-image>
+        <a-image src="models/51b2f4f3bf135718f93794f1411cbba6.jpg" position="0 10 30" rotation="0 180 0" width="60" height="25" class="collision"></a-image>
+        <a-gltf-model src="#bush-model" position="-5 0 -8" scale="15 15 15" class="collision" sway="speed:1; angle:5"></a-gltf-model>
+    <a-gltf-model src="#bush-model" position="5 0 -12" scale="15 15 15" class="collision" sway="speed:1.2; angle:4"></a-gltf-model>
+    <a-entity position="-12 0 0">
+      <a-gltf-model src="#bush-model" position="0 0 -2" scale="15 15 15" class="collision" sway="speed:1; angle:5"></a-gltf-model>
+      <a-gltf-model src="#bush-model" position="0 0 2" scale="15 15 15" class="collision" sway="speed:1.1; angle:6"></a-gltf-model>
+      <a-gltf-model src="#bush-model" position="0 0 6" scale="15 15 15" class="collision" sway="speed:0.9; angle:4"></a-gltf-model>
+      <a-gltf-model src="#bush-model" position="0 0 10" scale="15 15 15" class="collision" sway="speed:1.2; angle:5"></a-gltf-model>
+      <a-gltf-model src="#bush-model" position="0 0 14" scale="15 15 15" class="collision" sway="speed:1; angle:5"></a-gltf-model>
+        </a-entity>
+        <a-gltf-model src="#building1" position="-24 0 0" scale="0.3 0.3 0.3" rotation="0 0 0" class="collision"></a-gltf-model>
+        <a-gltf-model src="#building2" position="-20 0 19" scale="0.3 0.3 0.3" rotation="0 90 0" class="collision"></a-gltf-model>
+        <a-gltf-model src="#building3" position="-23 0 -25" scale="0.3 0.3 0.3" rotation="0 90 0" class="collision"></a-gltf-model>
 
         <a-entity position="12 0 0">
-          <a-gltf-model src="#bush-model" position="0 0 -2" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 2" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 6" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 10" scale="15 15 15"></a-gltf-model>
-          <a-gltf-model src="#bush-model" position="0 0 14" scale="15 15 15"></a-gltf-model>
+          <a-gltf-model src="#bush-model" position="0 0 -2" scale="15 15 15" class="collision" sway="speed:1; angle:5"></a-gltf-model>
+          <a-gltf-model src="#bush-model" position="0 0 2" scale="15 15 15" class="collision" sway="speed:1.1; angle:6"></a-gltf-model>
+          <a-gltf-model src="#bush-model" position="0 0 6" scale="15 15 15" class="collision" sway="speed:0.9; angle:4"></a-gltf-model>
+          <a-gltf-model src="#bush-model" position="0 0 10" scale="15 15 15" class="collision" sway="speed:1.2; angle:5"></a-gltf-model>
+          <a-gltf-model src="#bush-model" position="0 0 14" scale="15 15 15" class="collision" sway="speed:1; angle:4"></a-gltf-model>
+
         </a-entity>
-        <a-gltf-model src="#building2" position="23 0 -15" scale="0.3 0.3 0.3" rotation="0 90 0"> </a-gltf-model>
-        <a-gltf-model src="#building3" position="25 0 5" scale="0.3 0.3 0.3" rotation="0 90 0"></a-gltf-model>
-        <a-gltf-model src="#building1" position="25 0 17" scale="0.3 0.3 0.3"></a-gltf-model>
 
-        <a-gltf-model id="eiffel" src="#eiffel-model" position="0 0 -6" scale="0.5 0.5 0.5" class="clickable"></a-gltf-model>
-        <a-gltf-model src="#monument-model" position="0 0 15" scale="0.2 0.2 0.2" rotation="0 180 0"></a-gltf-model>
+        <a-gltf-model src="#building2" position="23 0 -15" scale="0.3 0.3 0.3" rotation="0 90 0" class="collision"></a-gltf-model>
+        <a-gltf-model src="#building3" position="25 0 5" scale="0.3 0.3 0.3" rotation="0 90 0" class="collision"></a-gltf-model>
+        <a-gltf-model src="#building1" position="25 0 17" scale="0.3 0.3 0.3" class="collision"></a-gltf-model>
+        <a-gltf-model id="eiffel" src="#eiffel-model" position="0 0 -6" scale="0.5 0.5 0.5" class="clickable collision"></a-gltf-model>
+        <a-gltf-model src="#monument-model" position="0 0 15" scale="0.2 0.2 0.2" rotation="0 180 0" class="collision"></a-gltf-model>
         <a-text value="Париж" position="-1 4 -6" color="black" width="8"></a-text>
-
         <a-plane id="btnDayNight" position="-0.7 1.5 4" width="0.4" height="0.2" color="#3498db"
                  text="value: День/Ночь; align: center; color: white"></a-plane>
         <a-plane id="btnLight" position="0.7 1.5 4" width="0.4" height="0.2" color="#f39c12"
                  text="value: Подсветка; align: center; color: white"></a-plane>
-
         <a-ring id="portalToTokyo" position="4 2 -5" radius-inner="1" radius-outer="1.3"
                 material="color: #00f; opacity: 0.6; side: double"
                 animation="property: rotation; to: 0 360 0; loop: true; dur: 4000"></a-ring>
@@ -75,12 +181,12 @@
 
       <a-entity id="tokyo" visible="false">
         <a-plane rotation="-90 0 0" width="30" height="30" color="#111"></a-plane>
-        <a-plane rotation="-90 0 0" width="10" height="30" color="#333" position="0 0 -10"></a-plane>
-        <a-plane rotation="-90 0 0" width="30" height="10" color="#333" position="0 0 -10"></a-plane>
-        <a-gltf-model src="#bush-model" position="-4 0 -8" scale="1.3 1.3 1.3"></a-gltf-model>
-        <a-box position="-3 2 -6" depth="2" height="4" width="2" material="color: #ff00ff; emissive: #ff00ff; opacity: 0.9"></a-box>
-        <a-box position="3 3 -6" depth="2" height="6" width="2" material="color: #00ffff; emissive: #00ffff; opacity: 0.9"></a-box>
-        <a-box position="0 1.5 -4" depth="2" height="3" width="2" material="color: #ffff00; emissive: #ffff00; opacity: 0.8"></a-box>
+        <a-plane rotation="-90 0 0" width="10" height="30" color="#333" position="0 0 -10" class="collision"></a-plane>
+        <a-plane rotation="-90 0 0" width="30" height="10" color="#333" position="0 0 -10" class="collision"></a-plane>
+        <a-gltf-model src="#bush-model" position="-4 0 -8" scale="1.3 1.3 1.3" class="collision"></a-gltf-model>
+        <a-box position="-3 2 -6" depth="2" height="4" width="2" material="color: #ff00ff; emissive: #ff00ff; opacity: 0.9" class="collision"></a-box>
+        <a-box position="3 3 -6" depth="2" height="6" width="2" material="color: #00ffff; emissive: #00ffff; opacity: 0.9" class="collision"></a-box>
+        <a-box position="0 1.5 -4" depth="2" height="3" width="2" material="color: #ffff00; emissive: #ffff00; opacity: 0.8" class="collision"></a-box>
         <a-text value="Токио" position="-1 5 -6" color="white" width="8"></a-text>
         <a-ring id="portalToParis" position="0 2 -3" radius-inner="1" radius-outer="1.3"
                 material="color: #f00; opacity: 0.6; side: double"
@@ -137,10 +243,12 @@
       eiffelLight.setAttribute('position', '0 5 -6');
       eiffelLight.setAttribute('visible', 'false');
       paris.appendChild(eiffelLight);
+
       btnLight.addEventListener('click', () => {
         isLightOn = !isLightOn;
         eiffelLight.setAttribute('visible', isLightOn);
       });
+
       portalToTokyo.addEventListener('click', () => {
         paris.setAttribute('visible', 'false');
         tokyo.setAttribute('visible', 'true');
@@ -169,6 +277,8 @@
           isOrange = !isOrange;
         });
       });
+      
+
     </script>
   </body>
 </html>
